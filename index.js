@@ -7,22 +7,16 @@ const client = new Client({
   ]
 });
 
-// ══════════════════════════════════════════
-//   الإعدادات - غيّرها حسب السيرفر
-// ══════════════════════════════════════════
-const WHITELIST_ROLE_ID = '1443294946089242727';  // رتبة WHITLIST
-const CALLUP_ROLE_ID    = '1502830142496575569';  // رتبة CALL UP
-const LOG_CHANNEL_ID    = '1503564649168244848';  // قناة السجل
-// ══════════════════════════════════════════
+const WHITELIST_ROLE_ID = '1443294946089242727';
+const CALLUP_ROLE_ID    = '1502830142496575569';
+const LOG_CHANNEL_ID    = '1503564649168244848';
 
 client.once('ready', () => {
   console.log(`✅ البوت شغّال: ${client.user.tag}`);
 });
 
-// ─── زر الكول أب ───────────────────────────
 client.on('interactionCreate', async (interaction) => {
 
-  // ── 1. زر يفتح الفورم ──
   if (interaction.isButton() && interaction.customId === 'open_callup_form') {
     const modal = new ModalBuilder()
       .setCustomId('callup_modal')
@@ -44,9 +38,9 @@ client.on('interactionCreate', async (interaction) => {
 
     const evidenceInput = new TextInputBuilder()
       .setCustomId('evidence')
-      .setLabel('الدليل (رابط أو وصف)')
-      .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('رابط الدليل أو وصفه...')
+      .setLabel('الدليل (رابط)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('https://...')
       .setRequired(true);
 
     modal.addComponents(
@@ -59,7 +53,6 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // ── 2. استقبال الفورم ──
   if (interaction.type === InteractionType.ModalSubmit && interaction.customId === 'callup_modal') {
     await interaction.deferReply({ ephemeral: true });
 
@@ -70,14 +63,12 @@ client.on('interactionCreate', async (interaction) => {
     const guild = interaction.guild;
     let targetMember;
 
-    // جلب العضو
     try {
       targetMember = await guild.members.fetch(targetId);
     } catch {
       return interaction.editReply({ content: '❌ **ما لقيت العضو!** تأكد من الـ ID وإن العضو في السيرفر.' });
     }
 
-    // ── شيل رتبة WHITLIST ──
     const hasWhitelist = targetMember.roles.cache.has(WHITELIST_ROLE_ID);
     if (!hasWhitelist) {
       return interaction.editReply({ content: `⚠️ **${targetMember.user.tag}** ما عنده رتبة WHITLIST أصلاً.` });
@@ -88,24 +79,28 @@ client.on('interactionCreate', async (interaction) => {
       await targetMember.roles.add(CALLUP_ROLE_ID, `كول أب - السبب: ${reason}`);
     } catch (err) {
       console.error(err);
-      return interaction.editReply({ content: '❌ **صار خطأ أثناء تغيير الرتب.** تأكد إن البوت عنده صلاحية إدارة الرتب وإن رتبته فوق رتبة العضو.' });
+      return interaction.editReply({ content: '❌ **صار خطأ أثناء تغيير الرتب.**' });
     }
 
-    // ── رسالة تأكيد ──
+    const evidenceText = evidence.startsWith('http')
+      ? `[اضغط هنا للدليل](${evidence})`
+      : evidence;
+
     const embed = new EmbedBuilder()
-      .setColor(0xE74C3C)
-      .setTitle('🚨 تم تنفيذ الكول أب')
+      .setColor(0xFF0000)
+      .setAuthor({ name: '🚨 تم تنفيذ الكول أب', iconURL: client.user.displayAvatarURL() })
+      .setThumbnail(targetMember.user.displayAvatarURL({ dynamic: true }))
       .addFields(
-        { name: '👤 العضو', value: `${targetMember.user.tag} (${targetId})`, inline: true },
-        { name: '👮 نُفّذ بواسطة', value: `${interaction.user.tag}`, inline: true },
-        { name: '📌 السبب', value: reason },
-        { name: '🔗 الدليل', value: evidence },
-        { name: '🔄 التغيير', value: `تمت إزالة **WHITLIST** وإضافة **CALL UP**` },
+        { name: '👤 العضو', value: `<@${targetId}>`, inline: true },
+        { name: '👮 نُفّذ بواسطة', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '\u200B', value: '\u200B', inline: true },
+        { name: '📌 السبب', value: `\`\`\`${reason}\`\`\`` },
+        { name: '🔗 الدليل', value: evidenceText },
+        { name: '🔄 التغيير', value: '> ❌ تمت إزالة رتبة **WHITLIST**\n> ✅ تمت إضافة رتبة **CALL UP**' },
       )
       .setTimestamp()
-      .setFooter({ text: 'نظام الكول أب' });
+      .setFooter({ text: `ID: ${targetId}` });
 
-    // زر إرجاع الرتبة
     const restoreButton = new ButtonBuilder()
       .setCustomId(`restore_${targetId}`)
       .setLabel('↩️ إرجاع الرتبة')
@@ -115,16 +110,14 @@ client.on('interactionCreate', async (interaction) => {
 
     await interaction.editReply({ content: '✅ تم تنفيذ الكول أب!' });
 
-    // ── إرسال للقناة الثانية ──
     try {
       const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
-      await logChannel.send({ embeds: [embed], components: [restoreRow] });
+      await logChannel.send({ content: `> تم تنفيذ كول أب على <@${targetId}>`, embeds: [embed], components: [restoreRow] });
     } catch (err) {
       console.error('خطأ في إرسال اللوق:', err);
     }
   }
 
-  // ── زر إرجاع الرتبة ──
   if (interaction.isButton() && interaction.customId.startsWith('restore_')) {
     await interaction.deferReply({ ephemeral: true });
 
@@ -147,21 +140,22 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     const restoreEmbed = new EmbedBuilder()
-      .setColor(0x2ECC71)
-      .setTitle('✅ تم إرجاع الرتبة')
+      .setColor(0x00FF7F)
+      .setAuthor({ name: '✅ تم إرجاع الرتبة', iconURL: client.user.displayAvatarURL() })
+      .setThumbnail(targetMember.user.displayAvatarURL({ dynamic: true }))
       .addFields(
-        { name: '👤 العضو', value: `${targetMember.user.tag} (${targetId})`, inline: true },
-        { name: '👮 بواسطة', value: `${interaction.user.tag}`, inline: true },
-        { name: '🔄 التغيير', value: `تمت إزالة **CALL UP** وإرجاع **WHITLIST**` },
+        { name: '👤 العضو', value: `<@${targetId}>`, inline: true },
+        { name: '👮 بواسطة', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '🔄 التغيير', value: '> ❌ تمت إزالة رتبة **CALL UP**\n> ✅ تمت إعادة رتبة **WHITLIST**' },
       )
       .setTimestamp()
-      .setFooter({ text: 'نظام الكول أب' });
+      .setFooter({ text: `ID: ${targetId}` });
 
     await interaction.editReply({ content: '✅ تم إرجاع الرتبة!' });
 
     try {
       const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
-      await logChannel.send({ embeds: [restoreEmbed] });
+      await logChannel.send({ content: `> تم إرجاع رتبة <@${targetId}>`, embeds: [restoreEmbed] });
     } catch {}
   }
 });
