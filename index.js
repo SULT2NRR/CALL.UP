@@ -415,40 +415,61 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   }
 });
 
-// ── أمر عرض السحبات (slash command بسيط عبر prefix) ──
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (!message.content.startsWith('!سحبات')) return;
+// ── تسجيل Slash Command عند الجاهزية ──
+client.once('ready', async () => {
+  const { REST, Routes, SlashCommandBuilder } = require('discord.js');
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('move')
+      .setDescription('عرض عدد سحبات الدعم لشخص معين')
+      .addStringOption(opt =>
+        opt.setName('id')
+          .setDescription('Copy ID الاداري')
+          .setRequired(true)
+      )
+      .toJSON()
+  ];
+
+  try {
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    console.log('Slash command /move مسجل');
+  } catch (e) { console.error(e); }
+});
+
+// ── معالجة /move ──
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== 'move') return;
 
   // تحقق من الرتبة
-  const member = message.member;
-  if (!member.roles.cache.has(STATS_ROLE_ID)) {
-    return message.reply({ content: '❌ ما عندك صلاحية عرض السحبات.', allowedMentions: { repliedUser: false } });
+  if (!interaction.member.roles.cache.has(STATS_ROLE_ID)) {
+    return interaction.reply({ content: '❌ ما عندك صلاحية استخدام هذا الأمر.', ephemeral: true });
   }
 
-  // عرض كل السحبات
-  if (pullStats.size === 0) {
-    return message.reply({ content: '📊 ما في سحبات مسجلة بعد.', allowedMentions: { repliedUser: false } });
-  }
+  const targetId = interaction.options.getString('id').trim();
+  const count = pullStats.get(targetId) || 0;
 
-  // ترتيب تنازلي
-  const sorted = [...pullStats.entries()].sort((a, b) => b[1] - a[1]);
-
-  const lines = await Promise.all(sorted.map(async ([id, count], i) => {
-    try {
-      const user = await client.users.fetch(id);
-      return `**${i + 1}.** <@${id}> (${user.tag}) — **${count}** سحبة`;
-    } catch {
-      return `**${i + 1}.** <@${id}> — **${count}** سحبة`;
-    }
-  }));
+  let userTag = targetId;
+  try {
+    const user = await client.users.fetch(targetId);
+    userTag = user.tag;
+  } catch {}
 
   const embed = new EmbedBuilder()
     .setColor(0x5865F2)
-    .setTitle('📊 إحصائيات سحب الدعم')
-    .setDescription(lines.join('\n'))
+    .setTitle('📊 سحبات الدعم')
+    .setThumbnail((await client.users.fetch(targetId).catch(() => null))?.displayAvatarURL({ dynamic: true }) || null)
+    .addFields(
+      { name: 'العضو', value: `<@${targetId}>`, inline: true },
+      { name: 'عدد السحبات', value: `**${count}** سحبة`, inline: true },
+    )
     .setTimestamp()
-    .setFooter({ text: 'فقط أصحاب الرتبة المخوّلة يشوفون هذا' });
+    .setFooter({ text: 'نظام سحب الدعم' });
 
-  await message.reply({ embeds: [embed], allowedMentions: { repliedUser: false } });
+  await interaction.reply({ embeds: [embed], ephemeral: true });
 });
