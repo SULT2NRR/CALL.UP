@@ -5,6 +5,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
   ]
 });
 
@@ -33,13 +35,22 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
   const data = callupData.get(member.id);
 
+  // تحديد الموعد النهائي من لحظة دخول الروم
+  const joinTime = Math.floor(Date.now()/1000);
+  const deadline = joinTime + 86400; // 24 ساعة من الدخول
+  if (data) {
+    data.deadline = deadline;
+    callupData.set(member.id, data);
+  }
+
   const notifyEmbed = new EmbedBuilder()
     .setColor(0x00FF7F)
     .setTitle('المستدعى دخل روم الكول أب')
     .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
     .addFields(
       { name: 'العضو', value: `<@${member.id}>`, inline: true },
-      { name: 'الوقت', value: `<t:${Math.floor(Date.now()/1000)}:R>`, inline: true },
+      { name: 'دخل الساعة', value: `<t:${joinTime}:R>`, inline: true },
+      { name: 'الموعد النهائي', value: `<t:${deadline}:R>`, inline: false },
     )
     .setTimestamp();
 
@@ -51,7 +62,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         embeds: [new EmbedBuilder()
           .setColor(0x00FF7F)
           .setTitle('المستدعى دخل الروم!')
-          .setDescription(`العضو <@${member.id}> دخل روم الكول أب الآن.\n<t:${Math.floor(Date.now()/1000)}:R>`)
+          .setDescription(`العضو <@${member.id}> دخل روم الكول أب الآن.\nالموعد النهائي: <t:${deadline}:R>`)
           .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
           .setTimestamp()]
       });
@@ -114,8 +125,8 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.editReply({ content: 'صار خطأ في تغيير الرتب.' });
     }
 
-    const deadline = Math.floor(Date.now()/1000) + 86400;
-    callupData.set(targetId, { adminId: interaction.user.id, deadline });
+    // الموعد النهائي يبدأ من دخول الروم
+    callupData.set(targetId, { adminId: interaction.user.id, deadline: null });
     notifiedJoin.delete(targetId); // ريست الإشعار عشان يشتغل من جديد
 
     let evidenceText = 'لا يوجد';
@@ -135,7 +146,7 @@ client.on('interactionCreate', async (interaction) => {
         { name: '\u200B', value: '\u200B', inline: true },
         { name: 'السبب', value: `\`\`\`${reason}\`\`\`` },
         { name: 'الدليل', value: evidenceText },
-        { name: 'الموعد النهائي', value: `<t:${deadline}:R>` },
+        { name: 'الموعد النهائي', value: 'يبدأ عند دخول الروم' },
         { name: 'التغيير', value: '> ازالة WHITLIST\n> اضافة CALL UP' },
       )
       .setTimestamp()
@@ -340,3 +351,104 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
+// ══════════════════════════════════════════
+// نظام سحب الدعم
+// ══════════════════════════════════════════
+const WAITING_VC_ID    = '1503641755491242085';
+const SUPPORT_VC_IDS   = ['1503641812710195211', '1503641836919717908', '1503641860646899722'];
+const STATS_ROLE_ID    = '1503642089504903290';
+
+const pullStats     = new Map(); // { agentId -> count }
+const recentPulls   = new Map(); // { agentId -> timestamp } لمنع اللاق
+const waitingCooldown = new Map(); // { memberId -> timestamp } لمنع رجوع الويتنق خلال 15 ثانية
+const inWaiting     = new Set(); // من هو في الويتنق الحين
+
+client.on('voiceStateUpdate', async (oldState, newState) => {
+
+  const memberId = newState.member?.id || oldState.member?.id;
+  if (!memberId) return;
+
+  const oldCh = oldState.channelId;
+  const newCh = newState.channelId;
+
+  // ── تتبع من في الويتنق ──
+  if (newCh === WAITING_VC_ID) {
+    // دخل الويتنق - نسجله بعد 15 ثانية كولداون
+    const lastLeft = waitingCooldown.get(memberId);
+    const now = Date.now();
+    if (lastLeft && now - lastLeft < 15000) {
+      // رجع خلال 15 ثانية - ما نسجله
+      return;
+    }
+    inWaiting.add(memberId);
+  }
+
+  if (oldCh === WAITING_VC_ID && newCh !== WAITING_VC_ID) {
+    // طلع من الويتنق
+    waitingCooldown.set(memberId, Date.now());
+    inWaiting.delete(memberId);
+
+    // هل انتقل لروم سبورت؟
+    if (SUPPORT_VC_IDS.includes(newCh)) {
+      // من سحبه؟ - نبحث عن اللي في نفس روم السبورت
+      const guild = newState.guild;
+      const supportChannel = guild.channels.cache.get(newCh);
+      if (!supportChannel) return;
+
+      // نحصل أعضاء السبورت (غير المستدعى نفسه)
+      const agentsInChannel = supportChannel.members.filter(m => m.id !== memberId);
+
+      for (const [agentId] of agentsInChannel) {
+        const now = Date.now();
+
+        // حماية لاق - نفس الشخص ما يُحسب مرتين في 2 ثانية
+        const lastPull = recentPulls.get(agentId);
+        if (lastPull && now - lastPull < 2000) continue;
+
+        recentPulls.set(agentId, now);
+        pullStats.set(agentId, (pullStats.get(agentId) || 0) + 1);
+
+        console.log(`سحب دعم: ${agentId} = ${pullStats.get(agentId)}`);
+      }
+    }
+  }
+});
+
+// ── أمر عرض السحبات (slash command بسيط عبر prefix) ──
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (!message.content.startsWith('!سحبات')) return;
+
+  // تحقق من الرتبة
+  const member = message.member;
+  if (!member.roles.cache.has(STATS_ROLE_ID)) {
+    return message.reply({ content: '❌ ما عندك صلاحية عرض السحبات.', allowedMentions: { repliedUser: false } });
+  }
+
+  // عرض كل السحبات
+  if (pullStats.size === 0) {
+    return message.reply({ content: '📊 ما في سحبات مسجلة بعد.', allowedMentions: { repliedUser: false } });
+  }
+
+  // ترتيب تنازلي
+  const sorted = [...pullStats.entries()].sort((a, b) => b[1] - a[1]);
+
+  const lines = await Promise.all(sorted.map(async ([id, count], i) => {
+    try {
+      const user = await client.users.fetch(id);
+      return `**${i + 1}.** <@${id}> (${user.tag}) — **${count}** سحبة`;
+    } catch {
+      return `**${i + 1}.** <@${id}> — **${count}** سحبة`;
+    }
+  }));
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle('📊 إحصائيات سحب الدعم')
+    .setDescription(lines.join('\n'))
+    .setTimestamp()
+    .setFooter({ text: 'فقط أصحاب الرتبة المخوّلة يشوفون هذا' });
+
+  await message.reply({ embeds: [embed], allowedMentions: { repliedUser: false } });
+});
