@@ -108,6 +108,24 @@ client.on('interactionCreate', async (interaction) => {
 
     const restoreRow = new ActionRowBuilder().addComponents(restoreButton);
 
+    // ── إرسال رسالة خاصة للعضو ──
+    const dmEmbed = new EmbedBuilder()
+      .setColor(0xFF0000)
+      .setTitle('🚨 تم استدعاؤك — كول أب')
+      .setDescription([
+        '> احفظ تصاويرك **آخر 20 دقيقة** من خروجك وتوجّه فوراً.',
+        '',
+        '> ⚠️ في حال عدم توجهك خلال **24 ساعة** سيتم محاسبتك بشكل فوري.',
+      ].join('\n'))
+      .setTimestamp()
+      .setFooter({ text: 'نظام الكول أب' });
+
+    try {
+      await targetMember.send({ embeds: [dmEmbed] });
+    } catch {
+      console.log('ما قدر يرسل خاص للعضو - ربما أغلق الرسائل الخاصة');
+    }
+
     await interaction.editReply({ content: '✅ تم تنفيذ الكول أب!' });
 
     try {
