@@ -69,10 +69,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     } catch {}
   }
 
-  try {
-    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
-    await logChannel.send({ embeds: [notifyEmbed] });
-  } catch (err) { console.error(err); }
 });
 
 // ══════════════════════════════════════════
@@ -359,10 +355,10 @@ const WAITING_VC_ID    = '1503641755491242085';
 const SUPPORT_VC_IDS   = ['1503641812710195211', '1503641836919717908', '1503641860646899722'];
 const STATS_ROLE_ID    = '1503642089504903290';
 
-const pullStats     = new Map(); // { agentId -> count }
-const recentPulls   = new Map(); // { agentId -> timestamp } لمنع اللاق
-const waitingCooldown = new Map(); // { memberId -> timestamp } لمنع رجوع الويتنق خلال 15 ثانية
-const inWaiting     = new Set(); // من هو في الويتنق الحين
+const pullStats      = new Map(); // { agentId -> count }
+const recentPulls    = new Map(); // { agentId -> timestamp } لمنع اللاق
+const waitingEntryTime = new Map(); // { memberId -> timestamp } وقت دخول الويتنق
+const pulledThisSession = new Set(); // من تم سحبه بالفعل ولم يرجع للويتنق بعد 15 ثانية
 
 client.on('voiceStateUpdate', async (oldState, newState) => {
 
@@ -372,42 +368,46 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   const oldCh = oldState.channelId;
   const newCh = newState.channelId;
 
-  // ── تتبع من في الويتنق ──
-  if (newCh === WAITING_VC_ID) {
-    // دخل الويتنق - نسجله بعد 15 ثانية كولداون
-    const lastLeft = waitingCooldown.get(memberId);
+  // ── دخل الويتنق ──
+  if (newCh === WAITING_VC_ID && oldCh !== WAITING_VC_ID) {
     const now = Date.now();
-    if (lastLeft && now - lastLeft < 15000) {
-      // رجع خلال 15 ثانية - ما نسجله
-      return;
+    const lastEntry = waitingEntryTime.get(memberId);
+
+    // لو رجع خلال 15 ثانية من آخر سحب - ما نسجله كجلسة جديدة
+    if (pulledThisSession.has(memberId) && lastEntry && now - lastEntry < 15000) {
+      return; // تجاهل - لاق أو رجوع سريع
     }
-    inWaiting.add(memberId);
+
+    // جلسة جديدة في الويتنق
+    waitingEntryTime.set(memberId, now);
+    pulledThisSession.delete(memberId); // ريست عشان يقدر يتحسب مرة ثانية
   }
 
+  // ── طلع من الويتنق ──
   if (oldCh === WAITING_VC_ID && newCh !== WAITING_VC_ID) {
-    // طلع من الويتنق
-    waitingCooldown.set(memberId, Date.now());
-    inWaiting.delete(memberId);
 
-    // هل انتقل لروم سبورت؟
+    // هل دخل سبورت؟
     if (SUPPORT_VC_IDS.includes(newCh)) {
-      // من سحبه؟ - نبحث عن اللي في نفس روم السبورت
+
+      // لو سبق تحسب في هذه الجلسة - تجاهل
+      if (pulledThisSession.has(memberId)) return;
+
       const guild = newState.guild;
       const supportChannel = guild.channels.cache.get(newCh);
       if (!supportChannel) return;
 
-      // نحصل أعضاء السبورت (غير المستدعى نفسه)
       const agentsInChannel = supportChannel.members.filter(m => m.id !== memberId);
 
       for (const [agentId] of agentsInChannel) {
         const now = Date.now();
 
-        // حماية لاق - نفس الشخص ما يُحسب مرتين في 2 ثانية
+        // حماية لاق - نفس الاداري ما يُحسب مرتين في 2 ثانية
         const lastPull = recentPulls.get(agentId);
         if (lastPull && now - lastPull < 2000) continue;
 
         recentPulls.set(agentId, now);
         pullStats.set(agentId, (pullStats.get(agentId) || 0) + 1);
+        pulledThisSession.add(memberId); // سُحب - لا يُحسب مرة ثانية حتى يرجع بعد 15 ثانية
 
         console.log(`سحب دعم: ${agentId} = ${pullStats.get(agentId)}`);
       }
